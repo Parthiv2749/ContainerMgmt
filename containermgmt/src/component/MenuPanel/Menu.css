@@ -1,0 +1,22 @@
+.sidebar {
+    width: 250px;
+    height: 94vh;
+    /* height: 100%; */
+    border-top-right-radius: 5px;
+    font-size: 11pt;
+  }
+  
+  .rotate-180 {
+    transform: rotate(180deg);
+    transition: transform 0.3s ease;
+  }
+  
+  a {
+    text-decoration: none;
+    color: white;
+  }
+  
+  a:hover {
+    color: #adb5bd;
+  }
+  
