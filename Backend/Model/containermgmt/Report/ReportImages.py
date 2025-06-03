@@ -1,14 +1,15 @@
-from sqlalchemy import Column, String, Text, Integer,ForeignKey
-from sqlalchemy.orm import declarative_base, relationship
-from ...db import Base
+from sqlalchemy import Column, String, Text, ForeignKey, Integer
+from ...db import Base # Adjust this import path based on your project
+from sqlalchemy.orm import relationship
 
 
-class ReportImages(Base):
+class ReportImage(Base):
     __tablename__ = 'report_images'
     __table_args__ = {'schema': 'containermgmt'}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    report_id = Column(String(45), ForeignKey('containermgmt.report_details.report_id'))
-    image = Column(Text)
+    DMGP_id = Column(String(20), ForeignKey('containermgmt.damageproduct.id'), nullable=True)
+    path = Column(Text, nullable=False)
 
-    report = relationship("ReportDetails", back_populates="images")
+    # Optional: define relationship to DamageProduct
+    damage_product = relationship("DamageProduct", back_populates="images")

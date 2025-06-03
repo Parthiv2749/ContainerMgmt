@@ -1,4 +1,4 @@
-import logo from './logo.svg';
+
 import './App.css';
 import { AuthProvider } from './context/AuthContext';
 import MainPage from './component/MainPage';
@@ -15,3 +15,5 @@ function App() {
 }
 
 export default App;
+
+

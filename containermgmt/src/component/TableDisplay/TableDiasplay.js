@@ -2,20 +2,22 @@ import "./TableDispla.css"
 import axios from "axios";
 
 import React, { useState, useMemo } from "react";
-import { Pencil, Trash, Settings, Filter, X, Plus } from "lucide-react";
+import { Pencil, Trash, Settings, Filter, X, Plus, Mail } from "lucide-react";
 
 const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataChange  }) => {
   const [isFilterPopupOpen, setIsFilterPopupOpen] = useState(false);
   const [isSettingsPopupOpen, setIsSettingsPopupOpen] = useState(false);
+  const [isMailsPopupOpen, setIsMailsPopupOpen] = useState(false);
   const [isAddDataPopupOpen, setIsAddDataPopupOpen] = useState(false);
   const [filterColumn, setFilterColumn] = useState(columns[0]?.key || "");
   const [filterValue, setFilterValue] = useState("");
+  
   const [tempVisibleColumns, setTempVisibleColumns] = useState(
     columns.reduce((acc, col) => ({ ...acc, [col.key]: true }), {})
   );
   
   const [editRow, setEditRow] = useState(null);  // <- track which row is being edited
-
+  const [selectedDate, setSelectedDate] = useState("");
   const [visibleColumns, setVisibleColumns] = useState(tempVisibleColumns);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
 
@@ -49,6 +51,10 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
       row[filterColumn]?.toString().toLowerCase().includes(filterValue.toLowerCase())
     );
   }, [filterColumn, filterValue, sortedData]);
+
+  const incompleteData = filteredData.filter(row => row.status !== "Complete");
+  const completeData = filteredData.filter(row => row.status === "Complete");
+
 
   const handleEditClick = async (row) => {
     try {
@@ -98,6 +104,83 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
     }
   }
 
+  const handlePickupEmail = async () => {
+    if (!selectedDate) {
+      alert("Please select a date before sending the email.");
+      return;
+    }
+
+    try {
+      const response = await axios.get(`http://${process.env.REACT_APP_NETWORK}:${process.env.REACT_APP_PORT}/arrived`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`
+        },
+        params: { date: selectedDate },  // 👈 pass as query parameter
+      });
+
+      const containers = response.data;
+
+      if (!containers.length) {
+        alert("No arrived containers found.");
+        return;
+      }
+
+      const subject = "Pickup Request for Arrived Containers";
+      let body = "Please arrange pickup for the following containers:\n\n";
+
+      containers.forEach((c, i) => {
+        body += `${i + 1}. Container: ${c.container_no}\n   Location: ${c.emptied_at}\n   Arrival: ${c.empty_date}\n\n`;
+      });
+
+      const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = mailto;
+
+    } catch (err) {
+      console.error("Failed to fetch container data:", err);
+      alert("Error fetching container data.");
+    }
+  };
+
+
+  const handleDropoffEmail = async () => {
+    if (!selectedDate) {
+      alert("Please select a date before sending the email.");
+      return;
+    }
+
+    try {
+      const response = await axios.get(`http://${process.env.REACT_APP_NETWORK}:${process.env.REACT_APP_PORT}/arrived`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`
+        },
+        params: { date: selectedDate },  // 👈 pass as query parameter
+      });
+
+      const containers = response.data;
+
+      if (!containers.length) {
+        alert("No containers found to drop.");
+        return;
+      }
+
+      const subject = "Pickup Request for Arrived Containers";
+      let body = "Please arrange pickup for the following containers:\n\n";
+
+      containers.forEach((c, i) => {
+        body += `${i + 1}. Container: ${c.container_no}\n   Location: ${c.emptied_at}\n   Arrival: ${c.arrival_on_port}\n\n`;
+      });
+
+      const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = mailto;
+
+    } catch (err) {
+      console.error("Failed to fetch container data:", err);
+      alert("Error fetching container data.");
+    }
+
+  };
+
+
   return (
 
     <div className=" relative " disabled={true}>
@@ -106,6 +189,9 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
           <Plus className="w-5 h-5 mr-1" /> Add Data
         </button>
         <div className="flex space-x-2">
+          <button className="p-2 border rounded" onClick={() => setIsMailsPopupOpen(!isMailsPopupOpen)}>
+            <Mail className="w-5 h-5" />
+          </button>          
           <button className="p-2 border rounded" onClick={() => setIsFilterPopupOpen(!isFilterPopupOpen)}>
             <Filter className="w-5 h-5" />
           </button>
@@ -114,6 +200,39 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
           </button>
         </div>
       </div>
+
+      {isMailsPopupOpen && (
+        <div className="absolute right-0 mr-2 bg-white border p-4 shadow-md z-50 w-64 rounded">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="text-lg font-semibold">send Email</h3>
+            <button onClick={() => setIsMailsPopupOpen(false)}><X className="w-5 h-5" /></button>
+          </div>
+          <hr/>
+          {/* Date picker input */}
+          <label className="block mb-3">
+            <span className="text-sm font-medium">Select Date</span>
+            <input
+              type="date"
+              className="mt-1 block w-full border rounded px-2 py-1"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+            />
+          </label>
+
+          <button
+            onClick={handlePickupEmail}
+            className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 mb-2"
+          >
+            Pick Up
+          </button>
+          <button
+            onClick={handleDropoffEmail}
+            className="w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+          >
+            Drop Off
+          </button>
+        </div>
+      )}     
 
       {isFilterPopupOpen && (
         <div className="absolute right-0 mr-2 bg-white border p-4 shadow-md z-50 w-64 rounded">
@@ -191,6 +310,7 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
           </div>
         </div>
       )}
+      
 
       <div className="customParentTableClass TableClass relative max-h-[calc(44vh)] overflow-auto border border-gray-300 pr-2 mb-1">
         <table className="w-full table-auto border-collapse max-h-full">
@@ -205,7 +325,7 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
             </tr>
           </thead>
           <tbody>
-            {filteredData.map((row, index) => (
+            {incompleteData.map((row, index) => (
               <tr key={index} className="hover:bg-gray-100">
                 {columns.filter(col => !col.hidden && visibleColumns[col.key]).map(col => (
                   <td key={col.key} className="px-4 py-2 text-center">{row[col.key]}</td>
@@ -249,7 +369,7 @@ const InvoiceTable = ({ columns, rows, addDataComponent = false, title, onDataCh
             </tr>
           </thead>
           <tbody>
-            {filteredData.map((row, index) => (
+            {completeData.map((row, index) => (
               <tr key={index} className="hover:bg-gray-100">
                 {columns.filter(col => !col.hidden && visibleColumns[col.key]).map(col => (
                   <td key={col.key} className="px-4 py-2 text-center">{row[col.key]}</td>

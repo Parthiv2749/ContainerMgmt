@@ -1,11 +1,11 @@
 import { useRef, useEffect, useState } from "react";
 import axios from "axios";
-import TypableSelect from "../../UI/UXComponent/TypebleSelect";
+import TypableSelect from "../../UI/UXComponent/TypebleSelect.js";
 import { getAllOptions } from "./optionCache.js";
 
 
 
-function ContainerEntryForm({editData, onSubmitSuccess, onFormSubmit }) {
+function ContainerEntryForm({editData, onSubmitSuccess, onFormSubmit, userPermissions = [] }) {
   // console.log("ContainerEntryForm rendered with editData:", editData);
   const [formData, setFormData] = useState({
     container_id: "",
@@ -76,7 +76,8 @@ function ContainerEntryForm({editData, onSubmitSuccess, onFormSubmit }) {
 
 
 
-
+  const hasViewPermission = (field) => userPermissions.includes(`view_${field}`);
+  const hasEditPermission = (field) => userPermissions.includes(`edit_${field}`);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -180,21 +181,21 @@ function ContainerEntryForm({editData, onSubmitSuccess, onFormSubmit }) {
 
 
   const fields = [
-    { label: "Container No", name: "container_no", type: "text" },
-    { label: "Type", name: "type", type: "select", options: type },
-    { label: "Arrival Date", name: "arrival_on_port", type: "date" },
-    { label: "PO No", name: "PONo", type: "text" },
-    { label: "Supplier", name: "supplier", type: "select", options: suppliers },
-    { label: "Consignee", name: "consignee", type: "select", options: consignees },
-    { label: "Shipping Type", name: "docs", type: "select", options: shipping },
-    { label: "Tax", name: "tax", type: "checkbox" },
-    { label: "Material", name: "material", type: "textarea" },
-    { label: "Status", name: "status", type: "select", options: status },
-    { label: "In Bound", name: "in_bound", type: "date" },
-    { label: "Empty Date", name: "empty_date", type: "date" },
-    { label: "Out Bound", name: "out_bound", type: "date" },
-    { label: "Unloaded @ Dock", name: "unloaded_at_port", type: "date" },
-    { label: "Empty At", name: "emptied_at", type: "select", options: emptyLocations }
+    { label: "Container No", name: "container_no", type: "text", permission: "container_no" },
+    { label: "Type", name: "type", type: "select", options: type, permission: "type" },
+    { label: "Arrival Date", name: "arrival_on_port", type: "date", permission: "arrival_on_port" },
+    { label: "PO No", name: "PONo", type: "text", permission: "PONo" },
+    { label: "Supplier", name: "supplier", type: "select", options: suppliers, permission: "supplier" },
+    { label: "Consignee", name: "consignee", type: "select", options: consignees, permission: "consignee" },
+    { label: "Shipping Type", name: "docs", type: "select", options: shipping, permission: "docs" },
+    { label: "Tax", name: "tax", type: "checkbox", permission: "tax" },
+    { label: "Material", name: "material", type: "textarea", permission: "material" },
+    { label: "Status", name: "status", type: "select", options: status, permission: "status" },
+    { label: "In Bound", name: "in_bound", type: "date", permission: "in_bound" },
+    { label: "Empty Date", name: "empty_date", type: "date", permission: "empty_date" },
+    { label: "Out Bound", name: "out_bound", type: "date", permission: "out_bound" },
+    { label: "Unloaded @ Dock", name: "unloaded_at_port", type: "date", permission: "unloaded_at_port" },
+    { label: "Empty At", name: "emptied_at", type: "select", options: emptyLocations, permission: "emptied_at" }
   ];
 
   return (

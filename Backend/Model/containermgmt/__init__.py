@@ -2,7 +2,8 @@ from .Container.ContainerDetails import ContainerDetails
 from .Container.ContainerDocs import ContainerDocs
 from .Container.PackingList import PackingList
 from .Report.ReportDetails import ReportDetails
-from .Report.ReportImages import ReportImages
+from .Report.ReportImages import ReportImage
+from .Report.DamageProduct import DamageProduct
 # from .Cinfo import *
 
 from .Cinfo.Supplier import Supplier

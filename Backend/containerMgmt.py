@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Body, Form, UploadFile, File, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Body, Form, UploadFile, File, Request, Query
+
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import FileResponse
 import mimetypes
@@ -27,7 +28,11 @@ import json
 
 from Model.db import Base, engine
 # from ORMSchema.allModel import DataBaseAccess, get_db
-
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+import os
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -61,6 +66,15 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+def generate_damage_report_pdf(data: dict) -> bytes:
+    template_dir = os.path.join("templates", "report")
+    env = Environment(loader=FileSystemLoader(template_dir))
+    template = env.get_template("damage_report.html")
+
+    html_content = template.render(data)
+    pdf_bytes = HTML(string=html_content, base_url=".").write_pdf()
+
+    return pdf_bytes
 
 app = FastAPI()
 
@@ -70,7 +84,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)
+ )
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -192,19 +206,22 @@ async def read_users_me(current_user: dict = Depends(get_current_user)):
 @cbv(ContainerRouter)
 class ContainerAPI:
     
-    
-    
     @ContainerRouter.get("/containerDetaiils")
     async def getcontainer(self, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
         data =( db.query(   ContainerDetails.Container_ID,
                             ContainerDetails.container_no,
-                            Supplier.name.label("supplier")
+                            Supplier.name.label("supplier"),
+                            func.date_format(ContainerDetails.arrival_on_port.label("Date"), "%Y-%m-%d"),
+                            UnloadVenue.venue.label("Venue"),
+                            Status.name.label("Status")
                         )
                 .outerjoin(Supplier, ContainerDetails.supplier == Supplier.supplier_id)
-               
+                .outerjoin(UnloadVenue, ContainerDetails.emptied_at == UnloadVenue.venue_id)
+                .outerjoin(Status, ContainerDetails.status == Status.status_id)
+                .order_by( func.date_format(ContainerDetails.arrival_on_port.label("Date"), "%Y-%m-%d"))
                ).all()
         
-        column = ['container_id','Container No', 'Supplier']
+        column = ['container_id','Container No', 'Supplier', 'Arrival', 'Venue', 'Status']
         return json.dumps({"column": column, "data": [list(row) for row in data]})
                           
     @ContainerRouter.post("/setContainerDetails")
@@ -276,42 +293,66 @@ class ContainerAPI:
     async def get_container_details_by_id(self,
         container_id: int, 
         db: Session = Depends(get_db), 
-        current_user: dict = Depends(get_current_user)
-    ):
+        current_user: dict = Depends(get_current_user)):
+        
         container = db.query(ContainerDetails).filter(ContainerDetails.Container_ID == container_id).first()
         if not container:
             raise HTTPException(status_code=404, detail="Container not found")
         return container  # Will include related `documents`
 
-    
     @ContainerRouter.delete("/deleteContainerDetails/{container_id}")
-    async def delete_container(self, container_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-       
-        #delete reports and images associated with the container
-        report_ids = db.query(ReportDetails.report_id).filter(ReportDetails.container_id == container_id).all()
+    async def delete_container(
+        self,
+        container_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
+        ):
+        # Step 1: Get report IDs associated with the container
+        report_ids = db.query(ReportDetails.report_id).filter(
+            ReportDetails.container_id == container_id
+        ).all()
+        report_ids = [r[0] for r in report_ids]  # Flatten tuples
 
-        # Flatten list of tuples
-        report_ids = [r[0] for r in report_ids]
+        # Step 2: Get damage product IDs associated with these reports
+        dmgp_ids = db.query(DamageProduct.id).filter(
+            DamageProduct.report_id.in_(report_ids)
+        ).all()
+        dmgp_ids = [d[0] for d in dmgp_ids]
 
-        # Step 2: Delete all associated report images
+        # Step 3: Delete associated report images
+        if dmgp_ids:
+            db.query(ReportImage).filter(
+                ReportImage.DMGP_id.in_(map(str, dmgp_ids))
+            ).delete(synchronize_session=False)
+
+        # Step 4: Delete damage product records
         if report_ids:
-            db.query(ReportImages).filter(ReportImages.report_id.in_(report_ids)).delete(synchronize_session=False)
+            db.query(DamageProduct).filter(
+                DamageProduct.report_id.in_(report_ids)
+            ).delete(synchronize_session=False)
 
-        # Step 3: Delete all reports for the container
-        db.query(ReportDetails).filter(ReportDetails.container_id == container_id).delete(synchronize_session=False)
+        # Step 5: Delete all report records
+        db.query(ReportDetails).filter(
+            ReportDetails.container_id == container_id
+        ).delete(synchronize_session=False)
 
-                #delete documents associated with the container
-        db.query(ContainerDocs).filter(ContainerDocs.container_id == container_id).delete()
-        #delete container details
-        
-        container = db.query(ContainerDetails).filter(ContainerDetails.Container_ID == container_id).first()
+        # Step 6: Delete container documents
+        db.query(ContainerDocs).filter(
+            ContainerDocs.container_id == container_id
+        ).delete(synchronize_session=False)
+
+        # Step 7: Delete the container itself
+        container = db.query(ContainerDetails).filter(
+            ContainerDetails.Container_ID == container_id
+        ).first()
         if not container:
             raise HTTPException(status_code=404, detail="Container not found")
-        
+
         db.delete(container)
         db.commit()
-        return {"message": "Container deleted successfully"}    
-    
+
+        return {"message": "Container deleted successfully"}
+
     @ContainerRouter.get("/getDocument/{doc_id}")
     async def get_document(self, doc_id: int, db: Session = Depends(get_db)):
         doc = db.query(ContainerDocs).filter(ContainerDocs.docs_id == doc_id).first()
@@ -342,7 +383,7 @@ class ContainerAPI:
         documents: List[UploadFile] = File([]),
         remove_doc_ids: List[int] = Form([]),
         db: Session = Depends(get_db)
-    ):
+        ):
         container = db.query(ContainerDetails).filter_by(Container_ID=container_id).first()
         if not container:
             raise HTTPException(status_code=404, detail="Container not found")
@@ -391,6 +432,363 @@ class ContainerAPI:
 
         db.commit()
         return {"message": "Container updated successfully"}
+    
+    @ContainerRouter.get("/getAllContainers")
+    async def getContainerForREport(self, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+        data = ( db.query(
+            ContainerDetails.Container_ID,
+            ContainerDetails.container_no,
+            
+            ) 
+            .filter(ContainerDetails.status != 4 ) 
+            ).all() 
+           
+        # column = ['Container ID','Container No', 'Supplier']
+        return json.dumps({ "data": [list(row) for row in data]})
+    
+    @ContainerRouter.get("/getContainerReports")
+    async def get_ContainerReports(self, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+        data = ( db.query(
+            ReportDetails.report_id,
+            ContainerDetails.container_no
+            ) 
+            .outerjoin(ContainerDetails, ContainerDetails.Container_ID == ReportDetails.container_id) 
+            ).all() 
+           
+        column = ['Report Id','Container No']
+        return json.dumps({"column": column, "data": [list(row) for row in data]})
+    
+    @ContainerRouter.get("/submitDamagedProducts")
+    async def submit_damage_report(
+     data: str = Form(...),
+     files: Optional[List[UploadFile]] = File(None),
+     db: Session = Depends(get_db),
+     current_user: dict = Depends(get_current_user)
+     ):
+        try:
+          parsed_data: Dict[str, Any] = json.loads(data)
+        except json.JSONDecodeError:
+          raise HTTPException(status_code=400, detail="Invalid JSON format in data.")
+
+
+        container_id = parsed_data.get("container_id")
+        products = parsed_data.get("products", [])
+
+        if not container_id:
+            raise HTTPException(status_code=422, detail="Missing container_id.")
+
+        # Create the report
+        report = ReportDetails(
+            container_id=container_id,
+            report_date=datetime.utcnow().date()
+        )
+        db.add(report)
+        db.commit()
+        db.refresh(report)
+
+        file_index = 0
+        files = files or []  # Ensure files is a list
+
+        for prod in products:
+            name = prod.get("name")
+            quantity = prod.get("quantity")
+            reason = prod.get("reason")
+            file_count = len(prod.get("files", []))
+
+            if not name or not quantity:
+                continue
+
+            # Save product to DB
+            damage_product = DamageProduct(
+                report_id=report.report_id,
+                product_name=name,
+                qty=quantity,
+                note=reason
+            )
+            db.add(damage_product)
+            db.commit()
+            db.refresh(damage_product)
+
+            # Select files for this product
+            product_files = files[file_index:file_index + file_count]
+            file_index += file_count
+
+            # Save files
+            # upload_dir = f"uploads/reports/{report.report_id}/product_{damage_product.id}"
+            saved_paths = save_uploaded_files(product_files, "Report")
+
+            # Save image paths to ReportImage
+            for path in saved_paths:
+                report_image = ReportImage(
+                    DMGP_id=str(damage_product.id),
+                    path=path
+                )
+                db.add(report_image)
+
+        db.commit()
+        return {"message": "Report submitted", "report_id": report.report_id}
+
+    @ContainerRouter.get("/getDamageReportById/{report_id}")
+    async def get_damage_report(
+        self,
+        report_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user)
+        ):
+        report = db.query(ReportDetails).filter(ReportDetails.report_id == report_id).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        container = db.query(ContainerDetails).filter(ContainerDetails.Container_ID == report.container_id).first()
+
+        products = []
+        for dp in db.query(DamageProduct).filter(DamageProduct.report_id == report.report_id).all():
+            images = db.query(ReportImage).filter(ReportImage.DMGP_id == str(dp.id)).all()
+            products.append({
+                "id": dp.id,
+                "name": dp.product_name,
+                "quantity": dp.qty,
+                "reason": dp.note,
+                "files": [
+                    {
+                        "id": img.id,
+                        "filename": img.path.split("/")[-1]  # assuming img.path stores full file path or URL
+                    }
+                    for img in images
+                ]
+            })
+
+        return {
+            "report_id": report_id,
+            "containerId": container.Container_ID if container else None,
+            "container_number": container.container_no if container else None,
+            "products": products
+        }
+           
+    @ContainerRouter.post("/updateDamagedProducts/{report_id}")
+    async def update_damage_report(self,
+        report_id: int,
+        request: Request,
+        files: Optional[List[UploadFile]] = File(None),
+        remove_doc_ids: List[int] = Form([]),
+        remove_product_ids: List[int] = Form([]),
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user)
+     ):
+        report = db.query(ReportDetails).filter_by(report_id=report_id).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        form = await request.form()
+        try:
+            parsed_data: Dict[str, Any] = json.loads(form.get("data", "{}"))
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON in 'data'")
+
+        new_products = parsed_data.get("products", [])
+        container_id = parsed_data.get("container_id")
+
+        files = files or []
+        file_index = 0
+        paths_to_remove = []
+
+        # print(new_products)
+        # Remove specified images
+        for doc_id in remove_doc_ids:
+            doc = db.query(ReportImage).filter_by(id=doc_id).first()
+            if doc:
+                paths_to_remove.append(doc.path)
+                db.delete(doc)
+
+        # Remove specified products (and their images)
+        for prod_id in remove_product_ids:
+            product = db.query(DamageProduct).filter_by(id=prod_id, report_id=report_id).first()
+            if product:
+                images = db.query(ReportImage).filter_by(DMGP_id=product.id).all()
+                for img in images:
+                    paths_to_remove.append(img.path)
+                    db.delete(img)
+                db.delete(product)
+
+        # Update report container if changed
+        if container_id and report.container_id != container_id:
+            report.container_id = container_id
+            db.add(report)
+
+        # Add or update products
+        for product in new_products:
+            
+            prod_id = product.get("id")
+            name = product.get("name")
+            quantity = product.get("quantity")
+            reason = product.get("reason")
+            file_count = len(product.get("files", []))
+
+            # if not name or not quantity:
+                # continue  # Skip invalid entries
+            
+            # print(prod_id)
+            if prod_id:  # Existing product — update
+                existing_product = db.query(DamageProduct).filter_by(id=prod_id).first()
+                if existing_product:
+                    if name is not None:
+                        existing_product.product_name = name
+                    if quantity is not None:
+                        existing_product.qty = quantity
+                    if reason is not None:
+                        existing_product.note = reason
+                    db.add(existing_product)
+                    db.commit()
+
+                    # Save new files if any
+                    new_files = files[file_index:file_index + file_count]
+                    saved_paths = save_uploaded_files(new_files, "Report")
+                    for path in saved_paths:
+                        db.add(ReportImage(DMGP_id=existing_product.id, path=path))
+                    file_index += file_count
+
+            else:  # New product — insert
+                new_product = DamageProduct(
+                    report_id=report_id,
+                    product_name=name,
+                    qty=quantity,
+                    note=reason
+                )
+                db.add(new_product)
+                db.commit()
+                db.refresh(new_product)
+
+                new_files = files[file_index:file_index + file_count]
+                saved_paths = save_uploaded_files(new_files, "Report")
+                for path in saved_paths:
+                    db.add(ReportImage(DMGP_id=new_product.id, path=path))
+                file_index += file_count
+
+        db.commit()
+        remove_files(paths_to_remove)
+
+        return {"message": "Report updated successfully", "report_id": report_id}
+   
+    @ContainerRouter.get("/getReportImage/{image_id}")
+    async def get_report_image(self, image_id: int, db: Session = Depends(get_db)):
+        image = db.query(ReportImage).filter(ReportImage.id == image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        file_path = os.path.normpath(image.path)  # or image.path depending on your schema
+        if not os.path.isfile(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        mime_type, _ = mimetypes.guess_type(file_path)
+        mime_type = mime_type or "application/octet-stream"
+
+        return FileResponse(
+            path=file_path,
+            media_type=mime_type,
+            filename=os.path.basename(file_path),
+            headers={
+                "Content-Disposition": f'inline; filename="{os.path.basename(file_path)}"'
+            }
+        )
+
+    @ContainerRouter.delete("/deleteDamagedReport/{report_id}")
+    def delete_damage_report(self,
+        report_id: int,
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user)
+     ):
+        report = db.query(ReportDetails).filter(ReportDetails.report_id == report_id).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+
+        # Collect image paths for removal from disk
+        paths_to_remove: List[str] = []
+
+        # Get all products for the report
+        products = db.query(DamageProduct).filter(DamageProduct.report_id==report_id).all()
+        for product in products:
+            # Get all images for each product
+            images = db.query(ReportImage).filter(ReportImage.DMGP_id==product.id).all()
+            for img in images:
+                paths_to_remove.append(img.path)
+                db.delete(img)
+
+            db.delete(product)
+
+        # Delete images directly associated with report (if any)
+        other_images = db.query(ReportImage).filter(ReportImage.DMGP_id==report_id).all()
+        for img in other_images:
+            paths_to_remove.append(img.path)
+            db.delete(img)
+
+        # Finally delete the report itself
+        db.delete(report)
+        db.commit()
+
+        # Remove files from disk
+        remove_files(paths_to_remove)
+
+        return {"message": "Report and all related data deleted", "report_id": report_id}
+
+    @ContainerRouter.get("/reports/{report_id}")
+    def get_report_pdf(self, report_id: int, db: Session = Depends(get_db)):
+        report = db.query(ReportDetails).filter(ReportDetails.report_id==report_id).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        container = db.query(ContainerDetails).filter(ContainerDetails.Container_ID == report.container_id).first()
+        products = db.query(DamageProduct).filter(DamageProduct.report_id==report_id).all()
+        data = {
+            "container_number": container.container_no if container.container_no else "N/A",
+            "report_date": report.report_date.strftime("%Y-%m-%d"),
+            "products": [
+                {
+                    "product_name": p.product_name,
+                    "qty": p.qty,
+                    "note": p.note,
+                    "images": [img.path for img in p.images]  # make sure paths are accessible
+                }
+                for p in products
+            ]
+        }
+
+        pdf_bytes = generate_damage_report_pdf(data)
+        return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf", headers={
+            "Content-Disposition": f"inline; filename=damage_report_{report_id}.pdf"
+        })
+    
+    @ContainerRouter.get("/arrived")
+    def get_arrived_containers(self, 
+        date: date = Query(...),  # 👈 required query parameter
+        db: Session = Depends(get_db),
+        user: User = Depends(get_current_user)
+        ):
+        containers = (
+            db.query(ContainerDetails)
+            .filter(ContainerDetails.arrival_on_port == date)
+            # .filter(
+            #     (ContainerDetails.owner_id == user.id) | (user.role.name == "admin")
+            # )
+            .all()
+        )
+        return containers
+
+    @ContainerRouter.get("/toPickup")
+    def get_toPickup_containers(self, 
+        date: date = Query(...),  # 👈 required query parameter
+        db: Session = Depends(get_db),
+        user: User = Depends(get_current_user)
+        ):
+        containers = (
+            db.query(ContainerDetails)
+            .filter(ContainerDetails.empty_date == date)
+            # .filter(
+            #     (ContainerDetails.owner_id == user.id) | (user.role.name == "admin")
+            # )
+            .all()
+        )
+        return containers
+
 
 @cbv(Cinfo)
 class CinfoAPI:
@@ -433,6 +831,8 @@ class CinfoAPI:
 
 app.include_router(Cinfo)
 app.include_router(ContainerRouter)
+
+
 # Add this block to run with `python main.py`
 if __name__ == "__main__":
-    uvicorn.run("containerMgmt:app", host="localhost", port=8000, reload=True)
+    uvicorn.run("containerMgmt:app", host="172.16.32.180", port=8000, reload=True)

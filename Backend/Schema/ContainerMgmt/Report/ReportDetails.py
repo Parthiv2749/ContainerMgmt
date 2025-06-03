@@ -6,7 +6,7 @@ from decimal import Decimal
 
 class ReportDetailsSchema(BaseModel):
     container_id: str
-    report_id: str
+    # report_id: str
     report_date: date
     material_as_packing_list: str | None = None
     damage_goods: str | None = None
